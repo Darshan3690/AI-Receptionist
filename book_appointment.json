@@ -1,0 +1,341 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "// Extract appointment data from VAPI\nconst vapiData = $input.item.json.body.message.toolCalls[0].function.arguments;\n\n// Extract customer information\nconst fullName = vapiData.fullName || '';\nconst email = vapiData.email || '';\nconst phone = vapiData.phone || '';\nconst serviceType = vapiData.serviceType || '';\nconst preferredDateTime = vapiData.preferredDateTime || '';\nconst locationType = vapiData.locationType || '';\n\n// Parse date and time\nconst dateTimeStr = preferredDateTime; // \"2025-10-08 14:00\"\nconst [datePart, timePart] = dateTimeStr.split(' ');\nconst [year, month, day] = datePart.split('-');\nconst [hour, minute] = timePart.split(':');\n\n// Create Date objects\nconst startDate = new Date(year, month - 1, day, hour, minute);\n\n// Determine appointment duration based on service type\nlet durationMinutes = 60; // Default 1 hour\nswitch(serviceType.toLowerCase()) {\n  case 'oil change':\n    durationMinutes = 30;\n    break;\n  case 'car servicing':\n    durationMinutes = 60;\n    break;\n  case 'tire replacement':\n    durationMinutes = 45;\n    break;\n  case 'brake repair':\n    durationMinutes = 90;\n    break;\n  case 'detailing':\n    durationMinutes = 120;\n    break;\n  case 'ac check':\n    durationMinutes = 45;\n    break;\n}\n\n// Calculate end time\nconst endDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);\n\n// Format for Google Calendar (ISO 8601)\nconst startISO = startDate.toISOString();\nconst endISO = endDate.toISOString();\n\n// Format for display\nconst displayDate = `${year}-${month}-${day}`;\nconst displayTime = `${hour}:${minute}`;\n\nreturn {\n  json: {\n    fullName: fullName,\n    email: email,\n    phone: phone,\n    serviceType: serviceType,\n    preferredDateTime: preferredDateTime,\n    locationType: locationType,\n    startTime: startISO,\n    endTime: endISO,\n    displayDate: displayDate,\n    displayTime: displayTime,\n    duration: durationMinutes,\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -880,
+        176
+      ],
+      "id": "eb06029f-f618-42ff-a94c-8089622a0f7d",
+      "name": "Parse VAPI Data"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "AI_rece",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Bookings",
+          "cachedResultUrl": ""
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -672,
+        176
+      ],
+      "id": "2fa9be3a-fc40-4924-8260-ce9200955b84",
+      "name": "Get All Bookings",
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "name": "Google Sheets account"
+          }
+        }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get new booking data\nconst newBooking = $node['Parse VAPI Data'].json;\n\n// Get all existing bookings from sheet\nconst existingBookings = $input.all();\n\n// Normalize phone number function (remove all non-digits)\nconst normalizePhone = (phone) => {\n  return String(phone || '').replace(/\\D/g, '');\n};\n\n// Normalize name function (lowercase, trim spaces)\nconst normalizeName = (name) => {\n  return String(name || '').toLowerCase().trim();\n};\n\n// Get normalized values for new booking\nconst newPhone = normalizePhone(newBooking.phone);\nconst newName = normalizeName(newBooking.fullName);\n\n// Check for duplicates\nlet isDuplicate = false;\nlet duplicateReason = '';\nlet existingBookingData = null;\n\nfor (const booking of existingBookings) {\n  const existingPhone = normalizePhone(booking.json['Phone Number']);\n  const existingName = normalizeName(booking.json['Full Name']);\n  const existingDateTime = booking.json['Preferred Date/Time'];\n  const existingService = booking.json['Service Type'];\n  \n  // Check if same phone OR same name\n  if (existingPhone === newPhone || existingName === newName) {\n    isDuplicate = true;\n    duplicateReason = `Customer already has an existing booking for ${existingService} on ${existingDateTime}`;\n    existingBookingData = {\n      fullName: booking.json['Full Name'],\n      email: booking.json['Email'],\n      phone: booking.json['Phone Number'],\n      serviceType: existingService,\n      preferredDateTime: existingDateTime,\n      locationType: booking.json['Location Type']\n    };\n    break;\n  }\n}\n\nreturn {\n  json: {\n    ...newBooking,\n    isDuplicate: isDuplicate,\n    duplicateReason: duplicateReason,\n    existingBooking: existingBookingData\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -464,
+        176
+      ],
+      "id": "26824eb1-33d6-4dc7-abaf-2097eecfe26c",
+      "name": "Check for Duplicates"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "25e99cb2-af2f-4ce5-b2b2-be457b871c8b",
+              "leftValue": "={{ $json.isDuplicate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -240,
+        160
+      ],
+      "id": "bce46748-467d-4b79-9dde-5c0459e40baa",
+      "name": "Is Duplicate?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"message\": \"{{ $json.duplicateReason }}\",\n  \"error\": \"DUPLICATE_BOOKING\",\n  \"details\": {\n    \"customerName\": \"{{ $json.fullName }}\",\n    \"email\": \"{{ $json.email }}\",\n    \"phone\": \"{{ $json.phone }}\",\n    \"requestedDateTime\": \"{{ $json.preferredDateTime }}\",\n    \"existingBooking\": {{ $json.existingBooking }}\n  }\n}",
+        "options": {
+          "responseCode": 409
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        -16,
+        352
+      ],
+      "id": "5be5142b-8665-4d1d-b1a9-7d941f949f98",
+      "name": "Return Duplicate Error"
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": ""
+        },
+        "start": "={{ $json.startTime }}",
+        "end": "={{ $json.endTime }}",
+        "additionalFields": {
+          "attendees": "={{ $json.email }}",
+          "description": "=📋 **Appointment Details**\n\n👤 **Customer:** {{ $json.fullName }}\n📧 **Email:** {{ $json.email }}\n📱 **Phone:** {{ $json.phone }}\n🔧 **Service:** {{ $json.serviceType }}\n⏱️ **Duration:** {{ $json.duration }} minutes\n📍 **Location:** {{ $json.locationType }}\n\n---\n**Booked via:** AI Receptionist\n**Booking Time:** {{ $json.timestamp }}",
+          "guestsCanInviteOthers": false,
+          "guestsCanModify": false,
+          "guestsCanSeeOtherGuests": false,
+          "sendUpdates": "all",
+          "summary": "={{ $json.serviceType }} - {{ $json.fullName }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "898f3c3a-30c5-499f-a4a3-132dc3545dd8",
+      "name": "Create Calendar Event",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the booking data\nconst bookingData = $node['Check for Duplicates'].json;\n\n// Get the calendar event data\nconst calendarEvent = $input.first().json;\n\n// Return merged data for sheet\nreturn {\n  json: {\n    fullName: bookingData.fullName,\n    email: bookingData.email,\n    phone: bookingData.phone,\n    serviceType: bookingData.serviceType,\n    preferredDateTime: bookingData.preferredDateTime,\n    locationType: bookingData.locationType,\n    timestamp: bookingData.timestamp,\n    calendarEventId: calendarEvent.id,\n    calendarEventLink: calendarEvent.htmlLink\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        176,
+        0
+      ],
+      "id": "e5bd41f0-f286-4526-aa68-2c64a4c63b42",
+      "name": "Merge Calendar Data"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "AI_rece",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Bookings",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Nczs0VQowwE8-A1uRMBKX4_YbzP5VeSFYvGuOyyPRcQ/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $json.timestamp }}",
+            "Full Name": "={{ $json.fullName }}",
+            "Email": "={{ $json.email }}",
+            "Phone Number": "={{ $json.phone }}",
+            "Service Type": "={{ $json.serviceType }}",
+            "Preferred Date/Time": "={{ $json.preferredDateTime }}",
+            "Location Type": "={{ $json.locationType }}",
+            "Garage Location": "={{ $json.locationType }}",
+            "Calendar Event ID": "={{ $json.calendarEventId }}"
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        384,
+        0
+      ],
+      "id": "89beb2df-7c16-43bf-aa8b-063ca907c447",
+      "name": "Add to Sheet",
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "name": "Google Sheets account"
+          }
+        }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"message\": \"Appointment booked successfully for {{ $json.fullName }}\",\n  \"appointmentDetails\": {\n    \"customerName\": \"{{ $json.fullName }}\",\n    \"email\": \"{{ $json.email }}\",\n    \"phone\": \"{{ $json.phone }}\",\n    \"serviceType\": \"{{ $json.serviceType }}\",\n    \"dateTime\": \"{{ $json.preferredDateTime }}\",\n    \"locationType\": \"{{ $json.locationType }}\",\n    \"calendarEventId\": \"{{ $json.calendarEventId }}\"\n  }\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        608,
+        0
+      ],
+      "id": "56d6c1ad-4778-4370-bcb6-f060797e2618",
+      "name": "Return Success"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vapi-appointment",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1088,
+        176
+      ],
+      "id": "a8fdff63-3de8-46a4-accc-7b6d659288dd",
+      "name": "Webhook"
+      
+    }
+  ],
+  "connections": {
+    "Parse VAPI Data": {
+      "main": [
+        [
+          {
+            "node": "Get All Bookings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Bookings": {
+      "main": [
+        [
+          {
+            "node": "Check for Duplicates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Duplicates": {
+      "main": [
+        [
+          {
+            "node": "Is Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Return Duplicate Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Merge Calendar Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Calendar Data": {
+      "main": [
+        [
+          {
+            "node": "Add to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Return Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse VAPI Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    
+  }
+}

@@ -1,0 +1,263 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "check_duplicate",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -352,
+        128
+      ],
+      "id": "5c2444bc-ac25-4f66-b1eb-06531c559c76",
+      "name": "Webhook"
+      
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "customer_name",
+              "name": "customerName",
+              "value": "={{ $json.fullName }}",
+              "type": "string"
+            },
+            {
+              "id": "customer_phone",
+              "name": "customerPhone",
+              "value": "={{ $json.phone }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        96,
+        144
+      ],
+      "id": "436ea3fc-68a9-408d-b75c-d28fc113b11f",
+      "name": "Set Customer Data"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "25e99cb2-af2f-4ce5-b2b2-be457b871c8b",
+              "leftValue": "={{ $json.duplicate_found }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "b0441803-ca94-4ae9-9e6b-89102228e015",
+              "leftValue": "",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        736,
+        144
+      ],
+      "id": "2d9128fc-5085-4d90-aa64-935fd2d5bf55",
+      "name": "If2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===== CODE FOR: Code in JavaScript5 node =====\n// Extract data from VAPI check_duplicate call\nconst vapiData = $input.item.json.body.message.toolCalls[0].function.arguments;\n\n// Extract customer information (only name and phone are sent)\n// Note: API uses 'FullName' with capital F\nconst fullName = vapiData.fullName || '';\nconst phone = vapiData.phone || '';\n\n// Return just the search criteria\nreturn {\n  json: {\n    fullName: fullName,\n    phone: phone,\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -112,
+        128
+      ],
+      "id": "7d781d2e-188b-4f51-b972-a51a452b7215",
+      "name": "Code in JavaScript5"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"duplicate_found\": false,\n  \"message\": \"No existing booking found. Proceed with appointment booking.\",\n  \"customerInfo\": {\n    \"name\": \"{{$json.customerInfo.name}}\",\n    \"phone\": \"{{$json.customerInfo.phone}}\"\n  }\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1056,
+        144
+      ],
+      "id": "b9469b5f-8993-4c9f-9399-6a2ec9bb64f2",
+      "name": "Respond to Webhook5"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "AI_rece"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Bookings",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Nczs0VQowwE8-A1uRMBKX4_YbzP5VeSFYvGuOyyPRcQ/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        320,
+        144
+      ],
+      "id": "9bbda7fb-c877-4907-9482-03911fea2a69",
+      "name": "Get row(s) in sheet3",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===== FIXED CODE FOR: Code in JavaScript6 node =====\n// This node checks for duplicates and returns proper response\n\n// Get customer data from previous node\nconst customerData = $('Set Customer Data').first().json;\nconst fullName = customerData.customerName;\nconst phone = customerData.customerPhone;\n\n// Get all existing bookings from Google Sheets\nconst existingBookings = $input.all();\n\n// CRITICAL FIX: Check if Google Sheets returned any data\nif (!existingBookings || existingBookings.length === 0) {\n  // No bookings in sheet = no duplicate\n  return {\n    json: {\n      duplicate_found: false,\n      message: \"No existing booking found. Proceed with appointment booking.\",\n      customerInfo: {\n        name: fullName,\n        phone: phone\n      },\n      timestamp: new Date().toISOString()\n    }\n  };\n}\n\n// Check for duplicate by phone number or name\nlet isDuplicate = false;\nlet existingBooking = null;\n\nfor (const booking of existingBookings) {\n  // CRITICAL: Skip empty rows\n  if (!booking.json || !booking.json['Phone Number']) {\n    continue;\n  }\n\n  const existingPhone = String(booking.json['Phone Number'] || '').replace(/\\D/g, '');\n  const existingName = booking.json['Full Name'];\n  const normalizedPhone = String(phone || '').replace(/\\D/g, '');\n  \n  // Check if same phone OR same name (case insensitive)\n  if ((existingPhone && normalizedPhone && existingPhone === normalizedPhone) || \n      (existingName && fullName && existingName.toLowerCase() === fullName.toLowerCase())) {\n    isDuplicate = true;\n    \n    // Handle single \"Preferred Date/Time\" column\n    const preferredDateTime = booking.json['Preferred Date/Time'] || '';\n    \n    // Try to split date and time if they're in one field\n    let preferredDate = 'not specified';\n    let preferredTime = 'not specified';\n    \n    if (preferredDateTime) {\n      // Format: \"2025-10-15 14:00\" or \"2025-10-15 2:00 PM\"\n      const parts = preferredDateTime.toString().trim().split(' ');\n      if (parts.length >= 2) {\n        preferredDate = parts[0]; // Date part\n        preferredTime = parts.slice(1).join(' '); // Time part (handles \"2:00 PM\" with space)\n      } else {\n        preferredDate = preferredDateTime; // If no space, treat as date only\n      }\n    }\n    \n    const serviceType = booking.json['Service Type'] || 'service';\n    const garageLocation = booking.json['Garage Location'] || booking.json['Location Type'] || 'not specified';\n    \n    existingBooking = {\n      fullName: existingName,\n      phone: existingPhone,\n      date: preferredDate,\n      time: preferredTime,\n      serviceType: serviceType,\n      garageLocation: garageLocation\n    };\n    break;\n  }\n}\n\n// Return result\nif (isDuplicate) {\n  return {\n    json: {\n      duplicate_found: true,\n      existing_booking: existingBooking,\n      message: `Customer already has an existing appointment on ${existingBooking.date} at ${existingBooking.time} for ${existingBooking.serviceType}`,\n      timestamp: new Date().toISOString()\n    }\n  };\n} else {\n  return {\n    json: {\n      duplicate_found: false,\n      message: \"No existing booking found. Proceed with appointment booking.\",\n      customerInfo: {\n        name: fullName,\n        phone: phone\n      },\n      timestamp: new Date().toISOString()\n    }\n  };\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        128
+      ],
+      "id": "7aaf2ef9-7c42-41eb-9c54-af17fe9a7c3b",
+      "name": "Code in JavaScript6"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"duplicate_found\": true,\n  \"existing_booking\": {\n    \"fullName\": \"{{$json.existing_booking.fullName}}\",\n    \"phone\": \"{{$json.existing_booking.phone}}\",\n    \"date\": \"{{$json.existing_booking.date}}\",\n    \"time\": \"{{$json.existing_booking.time}}\",\n    \"serviceType\": \"{{$json.existing_booking.serviceType}}\",\n    \"garageLocation\": \"{{$json.existing_booking.garageLocation}}\"\n  },\n  \"message\": \"{{$json.message}}\"\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1056,
+        -48
+      ],
+      "id": "d6946453-efde-48ff-806d-61d041a5afd4",
+      "name": "Respond to Webhook6"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Customer Data": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If2": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook6",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond to Webhook5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript5": {
+      "main": [
+        [
+          {
+            "node": "Set Customer Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet3": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript6": {
+      "main": [
+        [
+          {
+            "node": "If2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

@@ -1,0 +1,143 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vapi-check-availability",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -432,
+        -320
+      ],
+      "id": "329f5328-86eb-483f-ac39-4efe48b44d1c",
+      "name": "Webhook"
+      
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===== CODE FOR: Check Availability Parser =====\n// Extract data from VAPI check_availability call\nconst vapiData = $input.item.json.body.message.toolCalls[0].function.arguments;\n\n// Extract service type (this is all that's sent)\nconst serviceType = vapiData.serviceType || '';\n\n// Calculate duration based on service type\nconst serviceDurations = {\n  \"Car Servicing\": 120,\n  \"Tire Replacement\": 90,\n  \"Oil Change\": 45,\n  \"Brake Repair\": 120,\n  \"Detailing\": 180,\n  \"AC Check\": 60\n};\n\nconst durationMinutes = serviceDurations[serviceType] || 60;\n\n// Calculate time window for calendar lookup\nconst now = new Date();\nconst searchStartISO = now.toISOString();\nconst searchEndISO = new Date(now.getTime() + durationMinutes * 60 * 1000).toISOString();\n\n// Return availability data\nreturn {\n  json: {\n    serviceType: serviceType,\n    durationMinutes: durationMinutes,\n    available: true, // You can add calendar check later\n    message: `We have availability for ${serviceType}. This service typically takes ${durationMinutes} minutes.`,\n    timestamp: now.toISOString(),\n    searchStartISO: searchStartISO,\n    searchEndISO: searchEndISO\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -208,
+        -352
+      ],
+      "id": "cb6f8cd2-8cc5-41ff-9a8c-4e74bdf05b04",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": ""
+        },
+        "returnAll": true,
+        "timeMin": "={{ $json.searchStartISO }}",
+        "timeMax": "={{ $json.searchEndISO }}",
+        "options": {
+          "orderBy": "startTime"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        64,
+        -352
+      ],
+      "id": "958786b8-b67f-404f-833e-c7a4d327a031",
+      "name": "Get many events",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "Google Calendar account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the requested appointment details from the first Code node\nconst requestData = $('Code in JavaScript').first().json;\nconst requestedStart = new Date(requestData.requestedDateISO);\nconst requestedEnd = new Date(requestData.requestedEndISO);\nconst durationMinutes = requestData.durationMinutes;\n\n// Get existing calendar events from Google Calendar\nconst existingEvents = $input.all();\n\n// Check if requested time conflicts with any existing event\nlet isAvailable = true;\nlet conflictingEvent = null;\n\nfor (const event of existingEvents) {\n  if (!event.json.start || !event.json.end) continue;\n  \n  const eventStart = new Date(event.json.start.dateTime || event.json.start.date);\n  const eventEnd = new Date(event.json.end.dateTime || event.json.end.date);\n  \n  // Check for overlap - ANY overlap means conflict\n  if (\n    (requestedStart >= eventStart && requestedStart < eventEnd) ||\n    (requestedEnd > eventStart && requestedEnd <= eventEnd) ||\n    (requestedStart <= eventStart && requestedEnd >= eventEnd)\n  ) {\n    isAvailable = false;\n    conflictingEvent = event.json.summary || \"Existing appointment\";\n    break;\n  }\n}\n\n// Generate available time slots for the day (9 AM to 6 PM)\nlet availableSlots = [];\n\nif (!isAvailable) {\n  const workdayStart = 9; // 9 AM\n  const workdayEnd = 18; // 6 PM\n  \n  // Sort existing events by start time\n  const sortedEvents = existingEvents\n    .filter(e => e.json.start && e.json.start.dateTime)\n    .map(e => ({\n      start: new Date(e.json.start.dateTime),\n      end: new Date(e.json.end.dateTime)\n    }))\n    .sort((a, b) => a.start - b.start);\n  \n  // Check every 30-minute slot from 9 AM to 6 PM\n  for (let hour = workdayStart; hour < workdayEnd; hour++) {\n    for (let minutes of [0, 30]) {\n      const slotStart = new Date(requestedStart);\n      slotStart.setHours(hour, minutes, 0, 0);\n      \n      const slotEnd = new Date(slotStart.getTime() + durationMinutes * 60 * 1000);\n      \n      // Skip if slot extends beyond workday\n      if (slotEnd.getHours() > workdayEnd || \n         (slotEnd.getHours() === workdayEnd && slotEnd.getMinutes() > 0)) {\n        continue;\n      }\n      \n      // Check if this slot conflicts with any event\n      let slotAvailable = true;\n      for (const event of sortedEvents) {\n        if (\n          (slotStart >= event.start && slotStart < event.end) ||\n          (slotEnd > event.start && slotEnd <= event.end) ||\n          (slotStart <= event.start && slotEnd >= event.end)\n        ) {\n          slotAvailable = false;\n          break;\n        }\n      }\n      \n      if (slotAvailable) {\n        const timeStr = `${hour.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;\n        availableSlots.push(timeStr);\n      }\n    }\n  }\n  \n  // Limit to first 5 slots\n  availableSlots = availableSlots.slice(0, 5);\n}\n\n// Format response message\nlet message = \"\";\nif (isAvailable) {\n  message = `Great news! ${requestData.requestedTime} on ${requestData.requestedDate} is available for ${requestData.serviceType}.`;\n} else {\n  if (availableSlots.length > 0) {\n    message = `Unfortunately, ${requestData.requestedTime} is already booked${conflictingEvent ? ' (' + conflictingEvent + ')' : ''}. However, I have these available slots on ${requestData.requestedDate}: ${availableSlots.join(', ')}. Which time works best for you?`;\n  } else {\n    message = `Unfortunately, ${requestData.requestedDate} is fully booked. Could you try a different date?`;\n  }\n}\n\nreturn {\n  json: {\n    available: isAvailable,\n    requestedDateTime: requestData.requestedDateTime,\n    requestedDate: requestData.requestedDate,\n    requestedTime: requestData.requestedTime,\n    serviceType: requestData.serviceType,\n    durationMinutes: durationMinutes,\n    message: message,\n    alternativeSlots: availableSlots,\n    conflictingEvent: conflictingEvent\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        -336
+      ],
+      "id": "71cf5255-d435-497c-9250-3bfa4c1a9b11",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"available\": \"{{ $json.available }}\",\n  \"message\": \"{{ $json.message }}\",\n  \"requestedDateTime\": \"{{ $json.requestedDateTime }}\",\n  \"alternativeSlots\": \"{{ $json.alternativeSlots }}\",\n  \"serviceType\": \"{{ $json.serviceType }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        512,
+        -352
+      ],
+      "id": "30253b57-f96a-4aeb-8b9b-1a5a308c81cd",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Get many events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many events": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}
